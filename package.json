@@ -34,7 +34,7 @@
     "pack:all": "npm run build && electron-builder --mac --arm64 -c.mac.artifactName=\"\\${productName}-\\${version}-macOS M-series (arm64).\\${ext}\" && electron-builder --mac --x64 -c.mac.artifactName=\"\\${productName}-\\${version}-macOS Intel (x64).\\${ext}\" && electron-builder --win --x64 -c.win.artifactName=\"\\${productName}-Setup-\\${version}-Windows (win).\\${ext}\" && electron-builder --linux --x64 -c.linux.artifactName=\"\\${productName}-\\${version}-Linux (linux).\\${ext}\""
   },
   "dependencies": {
-    "@google/genai": "^1.50.1",
+    "@google/genai": "^3.6.1",
     "archiver": "^7.0.1",
     "axios": "^1.21.1",
     "diff-match-patch": "^1.0.5",
