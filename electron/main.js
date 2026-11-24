@@ -907,7 +907,12 @@ app.whenReady().then(async () => {
         // local-media:///Users/example/file.mp4 → 直接截取 scheme 后的路径
         const afterScheme = request.url.replace(/^local-media:\/\//, '');
         const cleanPath = afterScheme.split('?')[0].split('#')[0];
-        let filePath = decodeURIComponent(cleanPath);
+        let filePath;
+        try {
+            filePath = decodeURIComponent(cleanPath);
+        } catch (_) {
+            return new Response('Bad Request', { status: 400 });
+        }
         // On Windows, if filePath starts with "/" followed by a drive letter (e.g. "/C:"), remove the leading "/"
         if (process.platform === 'win32' && filePath.startsWith('/') && filePath.includes(':')) {
             filePath = filePath.substring(1);
@@ -1740,9 +1745,11 @@ app.whenReady().then(async () => {
     ipcMain.handle('collect-reels-project-assets', async (event, payload = {}) => {
         const outputPath = String(payload.outputPath || '');
         if (!outputPath || !path.isAbsolute(outputPath)) return { ok: false, error: '缺少有效的成片路径' };
+        if (isBlockedSensitiveFilePath(outputPath)) return { ok: false, error: '安全策略拦截：受保护路径不允许作为工程目录' };
         const outputDir = path.dirname(outputPath);
         const baseName = path.basename(outputPath, path.extname(outputPath)) || '成片';
         const projectDir = path.join(outputDir, `${baseName}-工程`);
+        if (isBlockedSensitiveFilePath(projectDir)) return { ok: false, error: '安全策略拦截：受保护路径不允许写入' };
         // 主成片放在工程包根目录，双击就能看到；其余辅助材料再按类型收纳。
         const roleDirs = { output: '', derived: '关联成片和音频', subtitle: '字幕', reels: 'Reels工程', analysis: '自动剪辑分析', source: '原始片段' };
         const assets = Array.isArray(payload.assets) ? payload.assets : [];
@@ -1756,6 +1763,7 @@ app.whenReady().then(async () => {
                 const asset = assets[index] || {};
                 const sourcePath = String(asset.path || '');
                 if (!sourcePath || !path.isAbsolute(sourcePath)) continue;
+                if (isBlockedSensitiveFilePath(sourcePath)) continue;
                 const role = Object.prototype.hasOwnProperty.call(roleDirs, asset.role) ? asset.role : 'source';
                 if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
                     missing.push({ role, path: sourcePath });
@@ -1797,12 +1805,13 @@ app.whenReady().then(async () => {
     ipcMain.handle('copy-reels-project-package', async (event, payload = {}) => {
         const sourceProjectDir = String(payload.sourceProjectDir || '');
         const outputPath = String(payload.outputPath || '');
-        if (!sourceProjectDir || !path.isAbsolute(sourceProjectDir) || !fs.existsSync(sourceProjectDir) || !fs.statSync(sourceProjectDir).isDirectory()) {
+        if (!sourceProjectDir || !path.isAbsolute(sourceProjectDir) || isBlockedSensitiveFilePath(sourceProjectDir) || !fs.existsSync(sourceProjectDir) || !fs.statSync(sourceProjectDir).isDirectory()) {
             return { ok: false, error: '原工程文件夹不存在' };
         }
-        if (!outputPath || !path.isAbsolute(outputPath)) return { ok: false, error: '缺少有效的最终成片路径' };
+        if (!outputPath || !path.isAbsolute(outputPath) || isBlockedSensitiveFilePath(outputPath)) return { ok: false, error: '缺少有效的最终成片路径' };
         const baseName = path.basename(outputPath, path.extname(outputPath)) || '成片';
         const targetProjectDir = path.join(path.dirname(outputPath), `${baseName}-工程`);
+        if (isBlockedSensitiveFilePath(targetProjectDir)) return { ok: false, error: '安全策略拦截：受保护路径不允许写入' };
         try {
             const sourceResolved = await fs.promises.realpath(sourceProjectDir);
             const targetResolved = path.resolve(targetProjectDir);
@@ -1815,7 +1824,7 @@ app.whenReady().then(async () => {
             const overlayPathMap = new Map();
             const usedOverlayNames = new Set();
             for (const sourcePath of overlayAssets) {
-                if (!sourcePath || !path.isAbsolute(sourcePath) || !fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) continue;
+                if (!sourcePath || !path.isAbsolute(sourcePath) || isBlockedSensitiveFilePath(sourcePath) || !fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) continue;
                 await fs.promises.mkdir(overlayDir, { recursive: true });
                 const sourceName = path.basename(sourcePath).replace(/[\\/:*?"<>|]/g, '_') || '覆层素材';
                 const ext = path.extname(sourceName);
@@ -1836,7 +1845,7 @@ app.whenReady().then(async () => {
             const originalDir = path.join(targetProjectDir, '原始片段');
             const usedOriginalNames = new Set();
             for (const sourcePath of (Array.isArray(payload.originalClips) ? payload.originalClips : [])) {
-                if (!sourcePath || !path.isAbsolute(sourcePath) || !fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) continue;
+                if (!sourcePath || !path.isAbsolute(sourcePath) || isBlockedSensitiveFilePath(sourcePath) || !fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) continue;
                 await fs.promises.mkdir(originalDir, { recursive: true });
                 const sourceName = path.basename(sourcePath);
                 const ext = path.extname(sourceName);
@@ -1850,7 +1859,7 @@ app.whenReady().then(async () => {
                 portablePathMap.set(sourcePath, targetPath);
             }
             for (const sourcePath of analysisAssets) {
-                if (!sourcePath || !path.isAbsolute(sourcePath) || !fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) continue;
+                if (!sourcePath || !path.isAbsolute(sourcePath) || isBlockedSensitiveFilePath(sourcePath) || !fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) continue;
                 await fs.promises.mkdir(analysisDir, { recursive: true });
                 await fs.promises.copyFile(sourcePath, path.join(analysisDir, path.basename(sourcePath)));
             }
@@ -1859,7 +1868,7 @@ app.whenReady().then(async () => {
             // 单片段的识别证据。已独立收集的“成片名-工程”子目录不再嵌套复制。
             const analysisOutputDir = String(payload.analysisOutputDir || '');
             let analysisTargetDir = '';
-            if (analysisOutputDir && path.isAbsolute(analysisOutputDir) && fs.existsSync(analysisOutputDir) && fs.statSync(analysisOutputDir).isDirectory()) {
+            if (analysisOutputDir && path.isAbsolute(analysisOutputDir) && !isBlockedSensitiveFilePath(analysisOutputDir) && fs.existsSync(analysisOutputDir) && fs.statSync(analysisOutputDir).isDirectory()) {
                 analysisTargetDir = path.join(analysisDir, path.basename(path.resolve(analysisOutputDir)) || '本次分析');
                 const sourceResolved = await fs.promises.realpath(analysisOutputDir);
                 const targetResolved = path.resolve(analysisTargetDir);
@@ -2249,8 +2258,10 @@ app.whenReady().then(async () => {
                     webPreferences: {
                         nodeIntegration: false,
                         contextIsolation: true,
+                        sandbox: true,
                     },
                 });
+                hardenPrivilegedWindowNavigation(pickerWin);
 
                 pickerWin.setMenuBarVisibility(false);
 
@@ -2429,12 +2440,13 @@ app.whenReady().then(async () => {
         hardenPrivilegedWindowNavigation(win);
 
         // 通过 URL hash 传递模板 ID，前端启动时读取
+        const safeTemplateId = encodeURIComponent(String(templateId || ''));
         if (!app.isPackaged) {
-            win.loadURL(`${DEV_SERVER_URL}/#template=${templateId}`);
+            win.loadURL(`${DEV_SERVER_URL}/#template=${safeTemplateId}`);
             win.webContents.openDevTools();
         } else {
             win.loadFile(path.join(__dirname, '../dist/index.html'), {
-                hash: `template=${templateId}`,
+                hash: `template=${safeTemplateId}`,
             });
         }
 
@@ -2598,11 +2610,15 @@ app.whenReady().then(async () => {
             hedraBridgeServer.listen(p, '127.0.0.1', () => {
                 activeBridgePort = p;
                 try {
+                    const serverFile = path.join(bridgeDir, 'vk-server.json');
                     fs.writeFileSync(
-                        path.join(bridgeDir, 'vk-server.json'),
+                        serverFile,
                         JSON.stringify({ port: p, pid: process.pid, isPackaged: app.isPackaged, updatedAt: Date.now() }, null, 2),
-                        'utf8'
+                        { encoding: 'utf8', mode: 0o600 }
                     );
+                    if (process.platform !== 'win32') {
+                        try { fs.chmodSync(serverFile, 0o600); } catch (_) {}
+                    }
                 } catch (_) {}
                 log(`[HedraBridge] Local bridge listening on 127.0.0.1:${p}`);
             });

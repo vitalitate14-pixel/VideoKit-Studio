@@ -6,7 +6,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const archiver = require('archiver');
-const { isBlockedSensitivePath } = require('./pathSecurity');
+const { isBlockedSensitivePath, isBlockedWritePath } = require('./pathSecurity');
 const cacheManager = require('./cacheManager');
 
 // ==================== JSON Settings ====================
@@ -62,7 +62,20 @@ function getSecureTmpDir(subDir) {
 
 function secureTmpFile(prefix, ext) {
     const dir = getSecureTmpDir();
-    return path.join(dir, `${prefix}_${crypto.randomUUID()}${ext || ''}`);
+    const safePrefix = String(prefix || 'tmp')
+        .replace(/[\0/\\:*?"<>|]/g, '_')
+        .replace(/\.\.+/g, '_')
+        .slice(0, 80) || 'tmp';
+    const safeExt = String(ext || '')
+        .replace(/[\0/\\:*?"<>|]/g, '')
+        .replace(/\.\.+/g, '')
+        .slice(0, 20);
+    const fullPath = path.resolve(dir, `${safePrefix}_${crypto.randomUUID()}${safeExt}`);
+    const dirRoot = path.resolve(dir) + path.sep;
+    if (!fullPath.startsWith(dirRoot)) {
+        throw new Error('安全策略拦截：临时文件路径越界');
+    }
+    return fullPath;
 }
 
 function readJSON(filePath) {
@@ -862,21 +875,32 @@ function uploadFile(buffer, filename) {
     if (!destPath.startsWith(uploadRoot)) {
         throw new Error('拒绝越界上传路径');
     }
+    if (isBlockedWritePath(destPath)) {
+        throw new Error('安全策略拦截：不允许上传可执行脚本或受保护文件名');
+    }
     fs.writeFileSync(destPath, buffer);
     return { path: destPath };
 }
 
 function createZip(files, outputPath) {
+    const validFiles = [];
+    for (const f of (Array.isArray(files) ? files : [])) {
+        if (typeof f !== 'string' || !f.trim()) continue;
+        if (isBlockedSensitivePath(f)) {
+            throw new Error('安全策略拦截：不允许将受保护的敏感文件打包为 ZIP');
+        }
+        if (fs.existsSync(f)) {
+            validFiles.push(f);
+        }
+    }
     return new Promise((resolve, reject) => {
         const output = fs.createWriteStream(outputPath);
         const archive = archiver('zip', { zlib: { level: 6 } });
         output.on('close', () => resolve(outputPath));
         archive.on('error', reject);
         archive.pipe(output);
-        for (const f of files) {
-            if (fs.existsSync(f)) {
-                archive.file(f, { name: path.basename(f) });
-            }
+        for (const f of validFiles) {
+            archive.file(f, { name: path.basename(f) });
         }
         archive.finalize();
     });

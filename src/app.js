@@ -9494,7 +9494,7 @@ async function hydrateVisualReviewReportThumbnails(root) {
         try { source = decodeURIComponent(target.dataset.reportThumbSource || ''); } catch (_) {}
         const thumbnail = source ? await batchCutGenThumb(source) : '';
         if (!target.isConnected) return;
-        if (thumbnail) target.innerHTML = `<img${/^local-media:/i.test(String(thumbnail)) ? ' crossorigin="anonymous"' : ''} src="${thumbnail}" alt="素材缩略图" style="display:block;width:auto;height:50px;max-width:110px;object-fit:contain;">`;
+        if (thumbnail) target.innerHTML = `<img${/^local-media:/i.test(String(thumbnail)) ? ' crossorigin="anonymous"' : ''} src="${escapeHtmlAttr(thumbnail)}" alt="素材缩略图" style="display:block;width:auto;height:50px;max-width:110px;object-fit:contain;">`;
         else target.textContent = '无预览';
     }
 }
@@ -20791,7 +20791,7 @@ function pruneAutoEditReviewThumbnailObservers() {
 function applyAutoEditReviewThumbnail(element, thumbnail) {
     if (!element.isConnected || !autoEditReviewThumbnailVisible.has(element)) return;
     if (element.dataset.autoeditThumbRendered === 'true') return;
-    element.innerHTML = thumbnail ? `<img${/^local-media:/i.test(String(thumbnail)) ? ' crossorigin="anonymous"' : ''} src="${thumbnail}" alt="素材缩略图" decoding="async">` : '<span>无预览</span>';
+    element.innerHTML = thumbnail ? `<img${/^local-media:/i.test(String(thumbnail)) ? ' crossorigin="anonymous"' : ''} src="${escapeHtmlAttr(thumbnail)}" alt="素材缩略图" decoding="async">` : '<span>无预览</span>';
     element.dataset.autoeditThumbRendered = 'true';
     element.classList.toggle('ae-batch-review-thumb-failed', !thumbnail);
     preserveAutoEditGenerationThumbnailRatio(element);
@@ -34098,7 +34098,7 @@ async function loadHistoryVersions() {
                 itemDiv.style.cssText = 'display: flex; align-items: center; justify-content: space-between; font-size: 11px; padding: 6px 4px; border-bottom: 1px solid rgba(255,255,255,0.05);';
                 
                 const label = document.createElement('span');
-                label.innerHTML = `${verName}${isPrerelease} <span style="opacity:0.6;font-size:10px;">(${relDate})</span>`;
+                label.innerHTML = `${escapeHtmlAttr(verName)}${isPrerelease} <span style="opacity:0.6;font-size:10px;">(${escapeHtmlAttr(relDate)})</span>`;
                 label.style.fontWeight = '500';
                 itemDiv.appendChild(label);
                 
@@ -37671,14 +37671,18 @@ function _renderOrganizerGroups() {
 
     // 2. 尚未对号入座（待处理）的文件卡片
     if (plan.pending && plan.pending.length > 0) {
-        const pendingRows = plan.pending.map(f => {
-            const escapedFile = JSON.stringify(f).replace(/"/g, '&quot;');
+        window._organizerPendingFiles = plan.pending;
+        window.organizerOpenAddRuleByIndex = (idx) => {
+            const sample = window._organizerPendingFiles?.[idx];
+            if (sample) organizerOpenAddRule(sample);
+        };
+        const pendingRows = plan.pending.map((f, idx) => {
             return `
                 <div class="organizer-file-row" style="background:rgba(251,191,36,0.02);">
                     <div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
                         <span style="color:#fbbf24;">⚠️</span> <span>${organizerEsc(f.name)}</span>
                     </div>
-                    <button class="btn btn-secondary btn-small" onclick="organizerOpenAddRule(${escapedFile})" 
+                    <button class="btn btn-secondary btn-small" onclick="organizerOpenAddRuleByIndex(${idx})" 
                         style="color:#c4b5fd;border-color:rgba(124,92,255,0.4);font-size:11px;flex-shrink:0;margin-left:8px;" title="将此文件作为样本拆分字段建立新规则">
                         ➕ 以此为样本建规则
                     </button>

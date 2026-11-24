@@ -223,8 +223,11 @@ function compareVersions(a, b) {
 /**
  * 下载文件到本地
  */
-function downloadFile(url, destPath, onProgress) {
+function downloadFile(url, destPath, onProgress, redirectsLeft = 5) {
     return new Promise((resolve, reject) => {
+        if (redirectsLeft < 0) {
+            return reject(new Error('更新下载重定向次数过多'));
+        }
         if (!isAllowedUpdateUrl(url)) {
             return reject(new Error(`出于安全原因，更新下载仅允许受信任的 GitHub HTTPS 域名: ${url}`));
         }
@@ -238,7 +241,7 @@ function downloadFile(url, destPath, onProgress) {
                 if (!isAllowedUpdateUrl(nextUrl)) {
                     return reject(new Error(`拒绝不安全或非受信任域名的更新重定向: ${nextUrl}`));
                 }
-                return downloadFile(nextUrl, destPath, onProgress).then(resolve).catch(reject);
+                return downloadFile(nextUrl, destPath, onProgress, redirectsLeft - 1).then(resolve).catch(reject);
             }
 
             if (response.statusCode !== 200) {
@@ -280,8 +283,11 @@ function downloadFile(url, destPath, onProgress) {
 /**
  * HTTPS GET JSON
  */
-function httpGetJson(url) {
+function httpGetJson(url, redirectsLeft = 5) {
     return new Promise((resolve, reject) => {
+        if (redirectsLeft < 0) {
+            return reject(new Error('更新元数据请求重定向次数过多'));
+        }
         if (!isAllowedUpdateUrl(url)) {
             return reject(new Error(`拒绝请求非受信任的更新元数据地址: ${url}`));
         }
@@ -291,7 +297,7 @@ function httpGetJson(url) {
                 if (!isAllowedUpdateUrl(nextUrl)) {
                     return reject(new Error(`拒绝重定向到非受信任的更新元数据地址: ${nextUrl}`));
                 }
-                return httpGetJson(nextUrl).then(resolve).catch(reject);
+                return httpGetJson(nextUrl, redirectsLeft - 1).then(resolve).catch(reject);
             }
             let data = '';
             res.on('data', chunk => data += chunk);
@@ -307,6 +313,9 @@ function httpGetJson(url) {
  */
 async function portableUpdate(info) {
     const { version, zipUrl } = info;
+    if (!version || !/^[0-9A-Za-z._-]+$/.test(String(version)) || String(version).includes('..')) {
+        throw new Error(`非法的更新版本号格式: ${String(version || '')}`);
+    }
     const tmpDir = path.join(_portableDir, '.update-tmp');
 
     try {

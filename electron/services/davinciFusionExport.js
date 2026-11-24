@@ -604,12 +604,31 @@ function installResolveMenuScript(scriptPath) {
     // directory by macOS privacy controls. /Users/Shared is readable by both.
     const latestDir = path.join('/Users/Shared', 'VideoKit', 'Resolve');
     const latestScript = path.join(latestDir, 'VideoKit Import Fusion Latest.py');
-    fs.mkdirSync(latestDir, { recursive: true });
-    fs.copyFileSync(scriptPath, latestScript);
+    for (const checkPath of [path.join('/Users/Shared', 'VideoKit'), latestDir, latestScript]) {
+        try {
+            if (fs.lstatSync(checkPath).isSymbolicLink()) {
+                throw new Error(`安全策略拦截：检测到非法符号链接 ${checkPath}`);
+            }
+        } catch (err) {
+            if (err && err.code !== 'ENOENT') throw err;
+        }
+    }
+    fs.mkdirSync(latestDir, { recursive: true, mode: 0o755 });
+    const latestTmp = path.join(latestDir, `.VideoKit-Import-Fusion-${process.pid}-${Date.now()}.tmp`);
+    try {
+        fs.copyFileSync(scriptPath, latestTmp);
+        if (process.platform !== 'win32') {
+            try { fs.chmodSync(latestTmp, 0o644); } catch (_) { }
+        }
+        fs.renameSync(latestTmp, latestScript);
+    } finally {
+        try { if (fs.existsSync(latestTmp)) fs.unlinkSync(latestTmp); } catch (_) { }
+    }
 
     const sharedDir = '/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Comp';
     const sharedScript = path.join(sharedDir, 'VideoKit Import Fusion.py');
     const launcher = buildResolveLauncherPy(latestScript);
+    const shellSingleQuote = (val) => `'${String(val).replace(/'/g, `'\\''`)}'`;
     let needsInstall = true;
     try { needsInstall = fs.readFileSync(sharedScript, 'utf8') !== launcher; } catch (_) { /* install it */ }
     if (needsInstall) {
@@ -617,7 +636,7 @@ function installResolveMenuScript(scriptPath) {
         try {
             const tempLauncher = path.join(tempDir, 'videokit-resolve-launcher.py');
             fs.writeFileSync(tempLauncher, launcher, { encoding: 'utf8', mode: 0o600 });
-            const command = `install -d -m 755 ${JSON.stringify(sharedDir)} && install -m 644 ${JSON.stringify(tempLauncher)} ${JSON.stringify(sharedScript)}`;
+            const command = `install -d -m 755 ${shellSingleQuote(sharedDir)} && install -m 644 ${shellSingleQuote(tempLauncher)} ${shellSingleQuote(sharedScript)}`;
             execFileSync('osascript', ['-e', `do shell script ${JSON.stringify(command)} with administrator privileges`], { stdio: 'ignore' });
         } finally {
             try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (_) { }

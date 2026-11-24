@@ -298,6 +298,9 @@ function createService({drive=require('./googleDriveDownloader'),fetchDirectStre
         const entry=match&&registered.get(match[1]);
         const headers={'Access-Control-Allow-Origin':'*','Cache-Control':'no-store','Accept-Ranges':'bytes'};
         if(!entry)return new Response('请重新读取云端链接以恢复预览。',{status:404,headers});
+        if(path.extname(entry.name||'').toLowerCase()==='.svg'){
+            headers['Content-Security-Policy']="default-src 'none'; style-src 'unsafe-inline'; img-src data:;";
+        }
         if(request.method==='OPTIONS')return new Response(null,{status:204,headers:{...headers,'Access-Control-Allow-Headers':'Range','Access-Control-Allow-Methods':'GET, HEAD, OPTIONS'}});
         if(!['GET','HEAD'].includes(request.method))return new Response(null,{status:405,headers});
         const range=request.headers.get('range');

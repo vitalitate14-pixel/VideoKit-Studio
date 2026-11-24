@@ -39,6 +39,7 @@ const autoEditService = require('./services/autoEdit');
 const activeAutoEditRequests = new Map();
 
 const {
+    isBlockedSensitivePath,
     assertSafeFileMutation: assertSafeRendererFileMutation,
     assertSafeSingleFileName,
     sanitizeChildDirName,
@@ -527,6 +528,9 @@ async function routeAPI(endpoint, data, progressSender = null, sender = null) {
                 const source = item.source;
                 const index = parseInt(item.index, 10);
                 if (!source || isNaN(index)) continue;
+                if (isBlockedSensitivePath(source)) {
+                    throw new Error('安全策略拦截：不允许重命名受保护文件');
+                }
                 if (!fs.existsSync(source)) {
                     console.warn(`[Rename] File not found: ${source}`);
                     continue;
@@ -544,6 +548,7 @@ async function routeAPI(endpoint, data, progressSender = null, sender = null) {
                     const newBaseName = `${padIndex}-${path.parse(cleanBase).name}`;
                     const newBase = `${newBaseName}${extName}`;
                     const newPath = path.join(dir, newBase);
+                    assertSafeRendererFileMutation(newPath);
 
                     if (source !== newPath) {
                         // Compute cache keys before renaming
@@ -2615,7 +2620,7 @@ async function routeAPI(endpoint, data, progressSender = null, sender = null) {
                     }
                     if (checkPath.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(checkPath)) {
                         try {
-                            if (fs.existsSync(checkPath) && fs.statSync(checkPath).isFile()) {
+                            if (!isBlockedSensitivePath(checkPath) && fs.existsSync(checkPath) && fs.statSync(checkPath).isFile()) {
                                 if (!assetMap[checkPath]) {
                                     const ext = path.extname(checkPath);
                                     const name = path.basename(checkPath, ext);
@@ -2674,6 +2679,8 @@ async function routeAPI(endpoint, data, progressSender = null, sender = null) {
 
         case 'templates/import-archive': {
             const zipPath = data.zip_path;
+            const collectionDepth = Number(data._collectionDepth || 0);
+            if (collectionDepth > 1) throw new Error('安全策略拦截：模板合集归档嵌套层级过深');
             if (!zipPath || !fs.existsSync(zipPath)) throw new Error('无效的归档文件');
             
             const extractDir = settingsService.getSecureTmpDir(`import_${Date.now()}_${require('node:crypto').randomUUID()}`);
@@ -2683,12 +2690,13 @@ async function routeAPI(endpoint, data, progressSender = null, sender = null) {
             const manifestPath=path.join(extractDir,'manifest.json');
             if(fs.existsSync(manifestPath)){
                 try{
+                    if (collectionDepth >= 1) throw Error('安全策略拦截：不支持嵌套的工程合集包');
                     const manifest=JSON.parse(fs.readFileSync(manifestPath,'utf8'));
                     if(manifest._format!=='videokit-package-collection' || !Array.isArray(manifest.entries))throw Error('不支持的工程合集格式');
                     if(manifest.entries.some(entry=>!/^\d+\.vkpkg$/.test(entry.file)))throw Error('工程合集文件名无效');
                     let count=0;
                     for(const entry of manifest.entries){
-                        await routeAPI('templates/import-archive',{zip_path:path.join(extractDir,entry.file)},progressSender,sender);count++;
+                        await routeAPI('templates/import-archive',{zip_path:path.join(extractDir,entry.file), _collectionDepth: collectionDepth + 1},progressSender,sender);count++;
                     }
                     return {count,message:`已导入 ${count} 个打包工程`};
                 }finally{fs.rmSync(extractDir,{recursive:true,force:true});}

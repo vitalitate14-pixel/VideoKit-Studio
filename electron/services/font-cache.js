@@ -157,7 +157,15 @@ function createFontCache({ app, net, log = console.log }) {
         fs.mkdirSync(dir, { recursive: true });
 
         const files = faces.map((face, i) => {
-            const ext = (path.extname(new URL(face.url).pathname) || '.ttf').toLowerCase();
+            const parsedUrl = new URL(face.url);
+            const host = parsedUrl.hostname.toLowerCase();
+            if (parsedUrl.protocol !== 'https:' || (host !== 'fonts.gstatic.com' && host !== 'fonts.googleapis.com' && !host.endsWith('.gstatic.com'))) {
+                throw new Error(`安全策略拦截：不受信任的字体下载地址 ${face.url}`);
+            }
+            const ext = (path.extname(parsedUrl.pathname) || '.ttf').toLowerCase();
+            if (!UPLOAD_EXTS.has(ext)) {
+                throw new Error(`安全策略拦截：不支持的远程字体格式 ${ext}`);
+            }
             const suffix = face.unicodeRange ? `-${i}` : '';
             return { ...face, file: `${face.weight.replace(/\s+/g, '-')}${face.style === 'italic' ? 'i' : ''}${suffix}${ext}` };
         });

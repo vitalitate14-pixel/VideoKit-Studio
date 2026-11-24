@@ -42,14 +42,26 @@ function getEntryFlags(entry) {
     return { mode, isDir, isSymlink, procMode };
 }
 
+const DEFAULT_MAX_ENTRIES = 10000;
+const DEFAULT_MAX_TOTAL_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024; // 4 GiB
+
 /**
- * Validate a ZIP archive against Zip Slip (CVE-2026-19693) and Symlink Traversal (CVE-2026-56876 / GHSA-jmr9-qjv8-65gv).
+ * Validate a ZIP archive against Zip Slip (CVE-2026-19693), Symlink Traversal (CVE-2026-56876 / GHSA-jmr9-qjv8-65gv),
+ * and Zip Bomb resource exhaustion.
  *
  * @param {string} zipPath - Path to the .zip archive
  * @param {string} targetDir - Extraction root directory
- * @param {object} opts - Options ({ allowInternalSymlinks?: boolean })
+ * @param {object} opts - Options ({ allowInternalSymlinks?: boolean, maxEntries?: number, maxTotalUncompressedBytes?: number })
  */
-async function validateZipEntries(zipPath, targetDir, { allowInternalSymlinks = false } = {}) {
+async function validateZipEntries(
+    zipPath,
+    targetDir,
+    {
+        allowInternalSymlinks = false,
+        maxEntries = DEFAULT_MAX_ENTRIES,
+        maxTotalUncompressedBytes = DEFAULT_MAX_TOTAL_UNCOMPRESSED_BYTES,
+    } = {}
+) {
     if (!path.isAbsolute(targetDir)) {
         throw new Error('Target directory is expected to be absolute');
     }
@@ -60,6 +72,8 @@ async function validateZipEntries(zipPath, targetDir, { allowInternalSymlinks = 
     const zipfile = await openZip(zipPath, { lazyEntries: true, validateEntrySizes: true });
     const openReadStream = promisify(zipfile.openReadStream.bind(zipfile));
     const seenSymlinks = new Set();
+    let entryCount = 0;
+    let totalDeclaredBytes = 0;
 
     return new Promise((resolve, reject) => {
         let settled = false;
@@ -81,6 +95,18 @@ async function validateZipEntries(zipPath, targetDir, { allowInternalSymlinks = 
         zipfile.on('entry', async (entry) => {
             if (settled) return;
             try {
+                entryCount += 1;
+                if (entryCount > maxEntries) {
+                    throw new Error(`ZIP archive exceeds maximum entry limit (${maxEntries})`);
+                }
+                const declaredSize = Number(entry.uncompressedSize) || 0;
+                if (declaredSize < 0) {
+                    throw new Error(`Invalid uncompressed size in ZIP entry: ${entry.fileName}`);
+                }
+                totalDeclaredBytes += declaredSize;
+                if (totalDeclaredBytes > maxTotalUncompressedBytes) {
+                    throw new Error(`ZIP archive exceeds maximum uncompressed size limit (${maxTotalUncompressedBytes} bytes)`);
+                }
                 const rawName = String(entry.fileName || '');
                 if (!rawName || rawName.includes('\0') || rawName.includes('\\')) {
                     throw new Error(`Unsafe ZIP entry filename: ${rawName}`);
@@ -141,13 +167,19 @@ async function safeExtractZip(zipPath, opts = {}) {
     if (!opts || !opts.dir) {
         throw new Error('safeExtractZip requires opts.dir');
     }
-    const { allowInternalSymlinks = false, onEntry } = opts;
-    await validateZipEntries(zipPath, opts.dir, { allowInternalSymlinks });
+    const {
+        allowInternalSymlinks = false,
+        onEntry,
+        maxEntries = DEFAULT_MAX_ENTRIES,
+        maxTotalUncompressedBytes = DEFAULT_MAX_TOTAL_UNCOMPRESSED_BYTES,
+    } = opts;
+    await validateZipEntries(zipPath, opts.dir, { allowInternalSymlinks, maxEntries, maxTotalUncompressedBytes });
 
     const rootDir = await fs.promises.realpath(opts.dir);
     const rootPrefix = rootDir.endsWith(path.sep) ? rootDir : rootDir + path.sep;
     const zipfile = await openZip(zipPath, { lazyEntries: true, validateEntrySizes: true });
     const openReadStream = promisify(zipfile.openReadStream.bind(zipfile));
+    let totalExtractedBytes = 0;
 
     return new Promise((resolve, reject) => {
         let settled = false;
@@ -206,7 +238,17 @@ async function safeExtractZip(zipPath, opts = {}) {
                     try { await fs.promises.unlink(dest); } catch (_) {}
                     await fs.promises.symlink(linkTarget, dest);
                 } else {
-                    await pipeline(readStream, fs.createWriteStream(dest, { mode: procMode }));
+                    const limiter = new stream.Transform({
+                        transform(chunk, _enc, cb) {
+                            totalExtractedBytes += chunk.length;
+                            if (totalExtractedBytes > maxTotalUncompressedBytes) {
+                                cb(new Error(`ZIP extraction exceeded maximum size limit (${maxTotalUncompressedBytes} bytes)`));
+                                return;
+                            }
+                            cb(null, chunk);
+                        },
+                    });
+                    await pipeline(readStream, limiter, fs.createWriteStream(dest, { mode: procMode }));
                 }
 
                 zipfile.readEntry();

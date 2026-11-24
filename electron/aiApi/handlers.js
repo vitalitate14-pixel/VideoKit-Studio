@@ -33,8 +33,10 @@ const BLOCKED_API_ENDPOINTS = new Set([
     'elevenlabs/web-token-manual',
     'settings/elevenlabs',
     'settings/elevenlabs/keys',
+    'settings/elevenlabs-keys-status',
     'settings/gladia-keys',
     'settings/gemini-keys',
+    'settings/transcription-providers',
     'google-tts/keys',
 ]);
 

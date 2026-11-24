@@ -159,6 +159,27 @@ function openElevenLabsAuthWindow(webContents = null) {
         }
     });
 
+    authWindow.webContents.setWindowOpenHandler((details) => {
+        try {
+            const parsed = new URL(String(details?.url || ''));
+            if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+                return {
+                    action: 'allow',
+                    overrideBrowserWindowOptions: {
+                        autoHideMenuBar: true,
+                        webPreferences: {
+                            partition: PARTITION,
+                            nodeIntegration: false,
+                            contextIsolation: true,
+                            sandbox: true,
+                        },
+                    },
+                };
+            }
+        } catch (_) { }
+        return { action: 'deny' };
+    });
+
     ses.webRequest.onBeforeSendHeaders({
         urls: ['https://api.elevenlabs.io/*', 'https://elevenlabs.io/api/*']
     }, (details, callback) => {

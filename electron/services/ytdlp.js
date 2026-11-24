@@ -205,6 +205,26 @@ function validateHttpUrl(rawUrl) {
     return u;
 }
 
+const ALLOWED_YTDLP_EXTS = new Set(['mp4', 'mkv', 'webm', 'mov', 'mp3', 'm4a', 'wav', 'flac', 'aac', 'opus', 'ogg']);
+
+function sanitizeYtdlpExt(ext, fallback = 'mp4') {
+    const clean = String(ext || fallback).trim().toLowerCase();
+    return ALLOWED_YTDLP_EXTS.has(clean) ? clean : fallback;
+}
+
+function sanitizeYtdlpSubLang(subLang, fallback = 'en') {
+    const clean = String(subLang || fallback).trim();
+    return /^[A-Za-z0-9_,-]{1,32}$/.test(clean) ? clean : fallback;
+}
+
+function sanitizeOutputTemplate(tpl, fallback = '%(id)s.%(ext)s') {
+    const clean = String(tpl || fallback).trim();
+    if (!clean || clean.startsWith('-') || clean.includes('..') || clean.includes('/') || clean.includes('\\') || clean.includes('\0')) {
+        return fallback;
+    }
+    return clean;
+}
+
 /** 分析视频链接 */
 async function analyzeVideo(url) {
     const safeUrl = validateHttpUrl(url);
@@ -308,8 +328,11 @@ async function downloadBatch(items, options = {}) {
         '--no-warnings', '--quiet', '--ignore-errors',
     ];
 
+    const safeExt = sanitizeYtdlpExt(ext, audioOnly ? 'mp3' : 'mp4');
+    const safeSubLang = sanitizeYtdlpSubLang(subLang, 'en');
+
     if (audioOnly) {
-        args.push('-f', 'bestaudio/best', '-x', '--audio-format', ext, '--audio-quality', '192K');
+        args.push('-f', 'bestaudio/best', '-x', '--audio-format', safeExt, '--audio-quality', '192K');
     } else {
         if (quality === 'best') {
             args.push('-f', 'bestvideo+bestaudio/best');
@@ -318,13 +341,13 @@ async function downloadBatch(items, options = {}) {
             args.push('-f', `bestvideo[height<=${h}]+bestaudio/best[height<=${h}]`);
         }
 
-        if (['mp4', 'mkv', 'webm', 'mov'].includes(ext)) {
-            args.push('--merge-output-format', ext);
+        if (['mp4', 'mkv', 'webm', 'mov'].includes(safeExt)) {
+            args.push('--merge-output-format', safeExt);
         }
     }
 
     if (subtitles) {
-        args.push('--write-subs', '--sub-langs', `${subLang},en,zh-Hans`);
+        args.push('--write-subs', '--sub-langs', `${safeSubLang},en,zh-Hans`);
     }
 
     const urls = items.map(i => i.url || i).filter(Boolean).map(validateHttpUrl);
@@ -357,6 +380,9 @@ async function downloadBatchSequential(urls, options = {}) {
         onProgress = () => { },
     } = options;
 
+    const safeTemplate = sanitizeOutputTemplate(outputTemplate, '%(id)s.%(ext)s');
+    const safeExt = sanitizeYtdlpExt(ext, audioOnly ? 'mp3' : 'mp4');
+
     fs.mkdirSync(outputDir, { recursive: true });
 
     const results = [];
@@ -368,7 +394,7 @@ async function downloadBatchSequential(urls, options = {}) {
         onProgress(i, urls.length, 'downloading', `正在下载 ${i + 1}/${urls.length}: ${url.substring(0, 60)}...`);
 
         const args = [
-            '-o', path.join(outputDir, outputTemplate),
+            '-o', path.join(outputDir, safeTemplate),
             '--no-warnings',
             '--newline',        // 每行输出进度（方便解析）
             '--ignore-errors',
@@ -385,10 +411,10 @@ async function downloadBatchSequential(urls, options = {}) {
         if (audioOnly) {
             args.length = 0; // 重置
             args.push(
-                '-o', path.join(outputDir, outputTemplate),
+                '-o', path.join(outputDir, safeTemplate),
                 '--no-warnings', '--newline',
                 '--restrict-filenames', '--trim-filenames', '120',
-                '-f', 'bestaudio/best', '-x', '--audio-format', ext
+                '-f', 'bestaudio/best', '-x', '--audio-format', safeExt
             );
         } else {
             if (quality !== 'best') {
@@ -397,8 +423,8 @@ async function downloadBatchSequential(urls, options = {}) {
                 const fIdx = args.indexOf('-f');
                 if (fIdx !== -1) args[fIdx + 1] = `bv*[height<=${h}]+ba/b[height<=${h}]`;
             }
-            if (['mp4', 'mkv', 'webm', 'mov'].includes(ext)) {
-                args.push('--merge-output-format', ext);
+            if (['mp4', 'mkv', 'webm', 'mov'].includes(safeExt)) {
+                args.push('--merge-output-format', safeExt);
             }
         }
 
